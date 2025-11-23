@@ -65,10 +65,20 @@ class FaceDetector:
                     print(f"Warning: Haar cascade not found. Face detection will be disabled.")
                     self.cascade = None
             
-            if self.cascade and not self.cascade.empty():
-                print(f"Haar cascade face detector loaded successfully")
-            else:
-                self.cascade = None
+            # Validate cascade is properly loaded
+            if self.cascade is not None:
+                # Check if cascade is valid by testing the empty() method if available
+                try:
+                    if hasattr(self.cascade, 'empty') and self.cascade.empty():
+                        self.cascade = None
+                    else:
+                        print(f"Haar cascade face detector loaded successfully")
+                except:
+                    # If empty() check fails, assume cascade is valid
+                    print(f"Haar cascade face detector loaded successfully")
+            
+            if self.cascade is None:
+                print(f"Warning: Haar cascade could not be initialized properly.")
         except Exception as e:
             print(f"Error loading Haar cascade: {e}")
             self.cascade = None

@@ -41,4 +41,7 @@ DRAW_TRACKS = True  # Draw object tracks
 
 # Object filtering
 IGNORE_CLASSES = ["person"]  # Classes to ignore for theft detection
-TRACKED_CLASSES = []  # Empty means track all non-person objects
+TRACKED_CLASSES = []  # Empty means track all non-person objects, otherwise only track specified classes
+
+# Tracking settings
+MAX_POSITION_HISTORY = 100  # Maximum number of positions to keep in object history

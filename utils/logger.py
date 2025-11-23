@@ -91,27 +91,22 @@ class TheftLogger:
         return event_id
     
     def _append_to_log(self, event_data: Dict[str, Any]):
-        """Append event data to JSON log file"""
-        # Read existing log or create new
-        if os.path.exists(self.current_log_file):
-            with open(self.current_log_file, 'r') as f:
-                try:
-                    log_data = json.load(f)
-                except json.JSONDecodeError:
-                    log_data = {"events": []}
-        else:
-            log_data = {"events": []}
+        """Append event data to JSON log file using JSONL format for efficiency"""
+        # Use JSONL format (one JSON object per line) for append-only efficiency
+        # This avoids reading the entire file each time
+        jsonl_file = self.current_log_file.replace('.json', '.jsonl')
         
-        # Append new event
-        log_data["events"].append(event_data)
+        with open(jsonl_file, 'a') as f:
+            json.dump(event_data, f)
+            f.write('\n')
         
-        # Write back to file
-        with open(self.current_log_file, 'w') as f:
-            json.dump(log_data, f, indent=2)
+        # Also maintain a consolidated JSON file (updated periodically)
+        # For now, just ensure the JSONL file exists
+        # The consolidated JSON can be generated on-demand if needed
     
     def get_recent_events(self, count: int = 10) -> List[Dict[str, Any]]:
         """
-        Get recent theft events
+        Get recent theft events from JSONL log
         
         Args:
             count: Number of recent events to retrieve
@@ -119,13 +114,23 @@ class TheftLogger:
         Returns:
             List of recent events
         """
-        if not os.path.exists(self.current_log_file):
+        jsonl_file = self.current_log_file.replace('.json', '.jsonl')
+        
+        if not os.path.exists(jsonl_file):
             return []
         
-        with open(self.current_log_file, 'r') as f:
-            try:
-                log_data = json.load(f)
-                events = log_data.get("events", [])
-                return events[-count:]
-            except json.JSONDecodeError:
-                return []
+        events = []
+        try:
+            with open(jsonl_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            event = json.loads(line)
+                            events.append(event)
+                        except json.JSONDecodeError:
+                            continue
+            
+            return events[-count:] if events else []
+        except Exception:
+            return []

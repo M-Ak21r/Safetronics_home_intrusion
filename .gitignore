@@ -27,6 +27,7 @@ env/
 
 # Evidence and logs (exclude from git)
 logs/*.json
+logs/*.jsonl
 logs/*.txt
 evidence/faces/*.jpg
 evidence/faces/*.png
@@ -50,3 +51,7 @@ models/*.prototxt
 # OS
 .DS_Store
 Thumbs.db
+
+# Test files and directories
+test_system.py
+/tmp/test_*

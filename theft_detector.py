@@ -44,8 +44,9 @@ class TrackedObject:
         self.missing_frames = 0
         
         # Keep only recent positions for memory efficiency
-        if len(self.positions) > 100:
-            self.positions = self.positions[-100:]
+        from config import MAX_POSITION_HISTORY
+        if len(self.positions) > MAX_POSITION_HISTORY:
+            self.positions = self.positions[-MAX_POSITION_HISTORY:]
     
     def get_displacement(self) -> float:
         """Calculate total displacement since first detection"""
@@ -304,7 +305,8 @@ class TheftDetector:
                 if track_id not in current_tracks:
                     self.tracked_objects[track_id].mark_missing()
             
-            # Check for theft events
+            # Check for theft events (separate from deletion loop)
+            objects_to_remove = []
             for track_id, obj in list(self.tracked_objects.items()):
                 event_type = self._check_theft_conditions(obj, frame)
                 
@@ -345,9 +347,14 @@ class TheftDetector:
                         cv2.putText(annotated_frame, f"THEFT: {event_type.upper()}!",
                                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
                     
-                    # Remove object if it's been missing too long
+                    # Mark object for removal if it's been missing too long
                     if event_type == "disappearance":
-                        del self.tracked_objects[track_id]
+                        objects_to_remove.append(track_id)
+            
+            # Remove objects that have disappeared (done after iteration)
+            for track_id in objects_to_remove:
+                if track_id in self.tracked_objects:
+                    del self.tracked_objects[track_id]
         
         # Draw status info
         status_text = f"Frame: {self.frame_count} | Objects: {len(self.tracked_objects)} | " \
