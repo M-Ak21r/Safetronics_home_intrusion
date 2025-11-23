@@ -301,13 +301,13 @@ class TheftDetector:
                             cv2.line(annotated_frame, points[j], points[j+1], (255, 0, 0), 2)
             
             # Mark missing objects
-            for track_id in list(self.tracked_objects.keys()):
+            for track_id in self.tracked_objects.keys():
                 if track_id not in current_tracks:
                     self.tracked_objects[track_id].mark_missing()
             
             # Check for theft events (separate from deletion loop)
             objects_to_remove = []
-            for track_id, obj in list(self.tracked_objects.items()):
+            for track_id, obj in self.tracked_objects.items():
                 event_type = self._check_theft_conditions(obj, frame)
                 
                 if event_type:

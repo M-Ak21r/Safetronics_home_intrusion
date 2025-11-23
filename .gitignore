@@ -52,6 +52,5 @@ models/*.prototxt
 .DS_Store
 Thumbs.db
 
-# Test files and directories
-test_system.py
+# Test directories
 /tmp/test_*
