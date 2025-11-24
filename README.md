@@ -87,11 +87,11 @@ python main.py --source 1
 ```bash
 python main.py \
   --source 0 \
-  --model yolov8n.pt \
+  --model yolov8x.pt \
   --displacement-threshold 150 \
   --disappearance-frames 45 \
   --face-method dnn \
-  --confidence 0.6
+  --confidence 0.65
 ```
 
 ### Command Line Arguments
@@ -99,12 +99,12 @@ python main.py \
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--source` | Video source (camera index or file path) | 0 |
-| `--model` | YOLOv8 model path | yolov8n.pt |
+| `--model` | YOLOv8 model path | yolov8x.pt |
 | `--displacement-threshold` | Displacement threshold in pixels | 100 |
 | `--disappearance-frames` | Frames before disappearance alert | 30 |
 | `--face-method` | Face detection method (dnn/haar) | dnn |
 | `--no-display` | Disable video display window | False |
-| `--confidence` | YOLO confidence threshold | 0.5 |
+| `--confidence` | YOLO confidence threshold | 0.65 |
 
 ### Controls
 - Press `q` to quit the application
@@ -118,14 +118,14 @@ Edit `config.py` to customize detection parameters:
 # Detection thresholds
 DISPLACEMENT_THRESHOLD = 100  # pixels
 DISAPPEARANCE_FRAMES = 30      # frames
-CONFIDENCE_THRESHOLD = 0.5     # YOLO confidence
+CONFIDENCE_THRESHOLD = 0.65    # YOLO confidence
 
 # Face detection
 FACE_DETECTION_METHOD = "dnn"  # "dnn" or "haar"
 FACE_CONFIDENCE_THRESHOLD = 0.7
 
 # Model paths
-YOLO_MODEL = "yolov8n.pt"
+YOLO_MODEL = "yolov8x.pt"  # Best model for maximum accuracy
 ```
 
 ## How It Works
@@ -222,16 +222,19 @@ Frame: 245 | Objects: 3 | Persons: 1
 
 ## Performance Tips
 
-### Current Configuration (Optimized for PC)
-The system is now optimized for PC/Desktop use with:
-- YOLOv8 medium model (`yolov8m.pt`) for excellent precision
+### Current Configuration (Optimized for PC - Best Model)
+The system is now optimized for PC/Desktop use with the best available model:
+- **YOLOv8 extra-large model (`yolov8x.pt`)** - Highest accuracy available
 - 1280x720 resolution for detailed detection
 - DNN face detection for maximum accuracy
 - Face detection every frame
+- Confidence threshold: 0.65
 
-### For Raspberry Pi (if needed)
-To optimize for Raspberry Pi, modify `config.py`:
-- Use YOLOv8 nano model (`yolov8n.pt`) for better performance
+**Note:** YOLOv8x provides the best detection accuracy but requires more computational power. Recommended for systems with dedicated GPU.
+
+### For Lower-End Systems
+To optimize for systems without GPU or Raspberry Pi, modify `config.py`:
+- Use YOLOv8 small model (`yolov8s.pt`) or nano (`yolov8n.pt`) for better performance
 - Reduce frame resolution to 640x480
 - Use Haar Cascade face detection instead of DNN
 - Increase face detection interval to 3 frames (`FACE_DETECTION_INTERVAL = 3`)

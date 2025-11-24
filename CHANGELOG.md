@@ -1,5 +1,12 @@
 # Changelog
 
+## [Best Model Upgrade] - 2024-11-24
+
+### Latest Update: Maximum Accuracy
+- **Best Model**: Upgraded to YOLOv8x (extra-large) - the most accurate YOLO model available
+- **Confidence Threshold**: Optimized to 0.65 for YOLOv8x
+- **Maximum Precision**: Provides state-of-the-art object and person detection accuracy
+
 ## [Enhanced Detection] - 2024-11-24
 
 ### User Feedback Implementation
@@ -7,8 +14,8 @@
 Implemented three key requirements from user feedback:
 
 #### 1. Optimized Detection Precision
-- **Upgraded Model**: Changed from YOLOv8n (nano) to YOLOv8m (medium) for PC
-- **Higher Confidence**: Increased threshold from 0.5 to 0.6 for more precise detections
+- **Upgraded Model**: Changed from YOLOv8n (nano) to YOLOv8x (extra-large) - best available
+- **Higher Confidence**: Increased threshold from 0.5 to 0.65 for maximum precision
 - **Better Tracking**: Implemented ByteTrack algorithm for superior object tracking
 - **NMS Tuning**: Added Non-Maximum Suppression IoU threshold (0.45) for precision
 - **Higher Resolution**: Increased from 640x480 to 1280x720 for detailed detection

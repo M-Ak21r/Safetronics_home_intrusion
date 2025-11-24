@@ -5,7 +5,7 @@ Configuration file for theft detection system
 # Detection thresholds
 DISPLACEMENT_THRESHOLD = 100  # pixels - minimum displacement to trigger theft alert
 DISAPPEARANCE_FRAMES = 30  # frames - object must be missing for this many frames
-CONFIDENCE_THRESHOLD = 0.6  # YOLOv8 detection confidence threshold (increased for better precision)
+CONFIDENCE_THRESHOLD = 0.65  # YOLOv8 detection confidence threshold (optimized for YOLOv8x)
 IOU_THRESHOLD = 0.5  # IoU threshold for overlap detection with person boxes
 NMS_IOU_THRESHOLD = 0.45  # Non-maximum suppression IoU threshold for better precision
 
@@ -17,7 +17,7 @@ FACE_MIN_NEIGHBORS = 5  # Haar cascade min neighbors
 FACE_DETECTION_INTERVAL = 1  # Detect faces every frame on PC (was 3 for Raspberry Pi)
 
 # Model paths
-YOLO_MODEL = "yolov8m.pt"  # YOLOv8 medium model (optimized for PC - better precision)
+YOLO_MODEL = "yolov8x.pt"  # YOLOv8 extra-large model (best accuracy - maximum precision for PC)
 DNN_PROTO = "models/deploy.prototxt"
 DNN_MODEL = "models/res10_300x300_ssd_iter_140000.caffemodel"
 HAAR_CASCADE = "models/haarcascade_frontalface_default.xml"
