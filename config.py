@@ -22,11 +22,19 @@ DNN_PROTO = "models/deploy.prototxt"
 DNN_MODEL = "models/res10_300x300_ssd_iter_140000.caffemodel"
 HAAR_CASCADE = "models/haarcascade_frontalface_default.xml"
 
-# Video settings (optimized for PC)
+# GPU acceleration settings
+USE_GPU = True  # Enable GPU acceleration (CUDA for NVIDIA GPUs)
+USE_FP16 = True  # Enable half-precision inference for faster processing on compatible GPUs
+GPU_DEVICE = 0  # GPU device index (0 for primary GPU)
+
+# Video settings (optimized for PC with GPU)
 VIDEO_SOURCE = 0  # 0 for webcam, or path to video file
-FRAME_WIDTH = 1280  # Higher resolution for PC
-FRAME_HEIGHT = 720  # Higher resolution for PC
+FRAME_WIDTH = 640  # Optimized resolution for better FPS (480p)
+FRAME_HEIGHT = 480  # Optimized resolution for better FPS (480p)
 FPS = 30
+# Video capture optimization
+# VIDEO_BACKEND options: None (default), 1400 (CAP_DSHOW on Windows), 200 (CAP_V4L2 on Linux)
+VIDEO_BACKEND = None  # Use None for default backend, or specify backend code for platform-specific optimization
 
 # Logging
 LOG_DIR = "logs"
