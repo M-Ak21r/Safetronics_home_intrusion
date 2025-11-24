@@ -47,6 +47,9 @@ TRACKED_CLASSES = []  # Empty means track all non-person objects, otherwise only
 # Tracking settings
 MAX_POSITION_HISTORY = 100  # Maximum number of positions to keep in object history
 THIEF_PROXIMITY_THRESHOLD = 200  # pixels - distance threshold to mark person as thief when object disappears
+                                  # ~15% of 1280px width - reasonable proximity for person to be involved
+THIEF_STATUS_TIMEOUT = 300  # frames - how long to keep thief status before clearing (10 sec at 30fps)
+PERSON_MISSING_TIMEOUT = 90  # frames - remove tracked person if missing this long (3 sec at 30fps)
 
 # Display colors (BGR format)
 COLOR_PERSON = (0, 255, 0)  # Green for normal persons

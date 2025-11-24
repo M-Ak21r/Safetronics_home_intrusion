@@ -23,6 +23,8 @@ class TrackedPerson:
         self.last_bbox = bbox
         self.last_position = calculate_center(bbox)
         self.is_thief = False  # Marked as thief when nearby object disappears
+        self.thief_marked_frame = None  # Frame when marked as thief
+        self.missing_frames = 0  # Count missing frames
         self.first_seen = datetime.now()
         self.last_seen = datetime.now()
     
@@ -32,6 +34,23 @@ class TrackedPerson:
         self.last_position = calculate_center(bbox)
         self.confidence = confidence
         self.last_seen = datetime.now()
+        self.missing_frames = 0
+    
+    def mark_as_thief(self, frame_count: int):
+        """Mark person as thief"""
+        self.is_thief = True
+        self.thief_marked_frame = frame_count
+    
+    def mark_missing(self):
+        """Mark person as missing in current frame"""
+        self.missing_frames += 1
+    
+    def should_clear_thief_status(self, current_frame: int) -> bool:
+        """Check if thief status should be cleared based on timeout"""
+        if not self.is_thief or self.thief_marked_frame is None:
+            return False
+        from config import THIEF_STATUS_TIMEOUT
+        return (current_frame - self.thief_marked_frame) > THIEF_STATUS_TIMEOUT
 
 
 class TrackedObject:
@@ -319,6 +338,12 @@ class TheftDetector:
                             person = TrackedPerson(track_id, bbox, conf)
                             self.tracked_persons[track_id] = person
                         
+                        # Clear thief status if timeout reached
+                        if person.should_clear_thief_status(self.frame_count):
+                            person.is_thief = False
+                            person.thief_marked_frame = None
+                            print(f"ℹ️  Person #{track_id} thief status cleared (timeout)")
+                        
                         # Draw person bounding box
                         if config.DRAW_BOXES:
                             x1, y1, x2, y2 = map(int, bbox)
@@ -386,10 +411,14 @@ class TheftDetector:
                         for j in range(len(points) - 1):
                             cv2.line(annotated_frame, points[j], points[j+1], color, 1)
             
-            # Mark missing objects
+            # Mark missing objects and persons
             for track_id in self.tracked_objects.keys():
                 if track_id not in current_object_tracks:
                     self.tracked_objects[track_id].mark_missing()
+            
+            for track_id in self.tracked_persons.keys():
+                if track_id not in current_person_tracks:
+                    self.tracked_persons[track_id].mark_missing()
             
             # Check for theft events (separate from deletion loop)
             objects_to_remove = []
@@ -404,7 +433,7 @@ class TheftDetector:
                         # Mark nearby persons as thieves
                         for person_id in nearby_persons:
                             if person_id in self.tracked_persons:
-                                self.tracked_persons[person_id].is_thief = True
+                                self.tracked_persons[person_id].mark_as_thief(self.frame_count)
                                 print(f"🚨 Person #{person_id} marked as THIEF - {obj.class_name} #{track_id} disappeared nearby")
                     
                     # Detect nearby faces (every N frames for performance)
@@ -457,10 +486,20 @@ class TheftDetector:
             for track_id in objects_to_remove:
                 if track_id in self.tracked_objects:
                     del self.tracked_objects[track_id]
+            
+            # Clean up persons that have been missing too long
+            persons_to_remove = []
+            for person_id, person in self.tracked_persons.items():
+                if person.missing_frames > config.PERSON_MISSING_TIMEOUT:
+                    persons_to_remove.append(person_id)
+            
+            for person_id in persons_to_remove:
+                if person_id in self.tracked_persons:
+                    del self.tracked_persons[person_id]
         
         # Draw status info
         status_text = f"Frame: {self.frame_count} | Objects: {len(self.tracked_objects)} | " \
-                     f"Persons: {len(self.person_boxes)}"
+                     f"Persons: {len(self.tracked_persons)}"
         cv2.putText(annotated_frame, status_text, (10, frame.shape[0] - 10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
