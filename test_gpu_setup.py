@@ -47,7 +47,7 @@ def test_gpu_availability():
                 print(f"   CUDA-enabled devices: {cuda_devices}")
                 if cuda_devices > 0:
                     print(f"   ✓ OpenCV can use GPU for DNN operations")
-            except:
+            except (AttributeError, Exception) as e:
                 print(f"   OpenCV CUDA runtime not available")
         else:
             print(f"   OpenCV built with CUDA: No")
@@ -100,7 +100,6 @@ def test_gpu_availability():
             print("  3. Set USE_GPU=True in config.py (already set)")
     except (ImportError, AttributeError) as e:
         print(f"⚠️  Could not complete summary: {e}")
-        pass
     
     print("="*60)
 

@@ -343,7 +343,7 @@ class TheftDetector:
                         track_args['half'] = True  # Enable FP16 inference
             except (RuntimeError, AttributeError) as e:
                 # GPU initialization failed, continue with CPU
-                pass
+                print(f"⚠️  GPU inference failed, falling back to CPU: {e}")
         
         results = self.yolo.track(frame, **track_args)
         
