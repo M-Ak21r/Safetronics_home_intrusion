@@ -36,11 +36,23 @@ class FaceDetector:
             raise ValueError(f"Unknown method: {method}. Use 'dnn' or 'haar'")
     
     def _init_dnn(self, proto_path: Optional[str], model_path: Optional[str]):
-        """Initialize DNN-based face detector"""
+        """Initialize DNN-based face detector with GPU acceleration"""
         try:
             if proto_path and model_path and os.path.exists(proto_path) and os.path.exists(model_path):
                 self.net = cv2.dnn.readNetFromCaffe(proto_path, model_path)
-                print(f"DNN face detector loaded successfully")
+                
+                # Try to use GPU acceleration for DNN if available
+                try:
+                    # Check if CUDA is available for OpenCV DNN
+                    if cv2.cuda.getCudaEnabledDeviceCount() > 0:
+                        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_CUDA)
+                        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CUDA)
+                        print(f"✓ DNN face detector loaded with CUDA acceleration")
+                    else:
+                        print(f"DNN face detector loaded successfully (CPU)")
+                except:
+                    # CUDA not available for OpenCV DNN, use CPU
+                    print(f"DNN face detector loaded successfully (CPU)")
             else:
                 print(f"Warning: DNN model files not found. Face detection will be disabled.")
                 print(f"Download from: https://github.com/opencv/opencv_3rdparty/tree/dnn_samples_face_detector_20170830")
@@ -101,10 +113,11 @@ class FaceDetector:
             return []
     
     def _detect_dnn(self, frame: np.ndarray) -> List[Tuple[int, int, int, int]]:
-        """Detect faces using DNN"""
+        """Detect faces using DNN with GPU acceleration"""
         h, w = frame.shape[:2]
+        # Create blob with swapRB=False for optimized processing
         blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), 
-                                     (104.0, 177.0, 123.0))
+                                     (104.0, 177.0, 123.0), swapRB=False)
         self.net.setInput(blob)
         detections = self.net.forward()
         

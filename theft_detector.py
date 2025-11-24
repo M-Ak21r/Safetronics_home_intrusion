@@ -110,10 +110,31 @@ class TheftDetector:
             model_path: Path to YOLOv8 model (default: yolov8n.pt)
             video_source: Video source (camera index or video file path)
         """
-        # Load YOLOv8 model
+        # Load YOLOv8 model with GPU acceleration
         self.model_path = model_path or config.YOLO_MODEL
         print(f"Loading YOLOv8 model: {self.model_path}")
+        
+        # Initialize YOLO model
         self.yolo = YOLO(self.model_path)
+        
+        # Configure for GPU if available and enabled
+        if config.USE_GPU:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    # Force model to GPU
+                    self.yolo.to('cuda')
+                    print(f"✓ YOLOv8 model loaded on GPU: {torch.cuda.get_device_name(0)}")
+                    
+                    # Enable FP16 for faster inference on compatible GPUs
+                    if config.USE_FP16:
+                        print("✓ Half-precision (FP16) inference enabled for faster processing")
+                else:
+                    print("⚠️  GPU requested but CUDA not available. Using CPU.")
+            except Exception as e:
+                print(f"⚠️  Error configuring GPU: {e}. Using CPU.")
+        else:
+            print("Using CPU for inference")
         
         # Initialize face detector
         self.face_detector = FaceDetector(
@@ -138,8 +159,12 @@ class TheftDetector:
         self.cap = None
     
     def start_capture(self) -> bool:
-        """Start video capture"""
-        self.cap = cv2.VideoCapture(self.video_source)
+        """Start video capture with optimized backend"""
+        # Use optimized backend if specified
+        if config.VIDEO_BACKEND is not None:
+            self.cap = cv2.VideoCapture(self.video_source, config.VIDEO_BACKEND)
+        else:
+            self.cap = cv2.VideoCapture(self.video_source)
         
         if not self.cap.isOpened():
             print(f"Error: Could not open video source {self.video_source}")
@@ -150,8 +175,13 @@ class TheftDetector:
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.FRAME_WIDTH)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.FRAME_HEIGHT)
             self.cap.set(cv2.CAP_PROP_FPS, config.FPS)
+            
+            # Additional optimizations for camera capture
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to minimize latency
         
         print(f"Video capture started from source: {self.video_source}")
+        print(f"  Resolution: {int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))}x{int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))}")
+        print(f"  FPS: {int(self.cap.get(cv2.CAP_PROP_FPS))}")
         return True
     
     def stop_capture(self):
@@ -285,14 +315,27 @@ class TheftDetector:
         theft_events = []
         
         # Run YOLOv8 tracking with optimized parameters for better precision
-        results = self.yolo.track(
-            frame,
-            persist=True,
-            conf=config.CONFIDENCE_THRESHOLD,
-            iou=config.NMS_IOU_THRESHOLD,
-            verbose=False,
-            tracker="bytetrack.yaml"
-        )
+        # Use GPU acceleration and FP16 if available
+        track_args = {
+            'persist': True,
+            'conf': config.CONFIDENCE_THRESHOLD,
+            'iou': config.NMS_IOU_THRESHOLD,
+            'verbose': False,
+            'tracker': "bytetrack.yaml"
+        }
+        
+        # Add GPU-specific optimizations
+        if config.USE_GPU:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    track_args['device'] = 'cuda'
+                    if config.USE_FP16:
+                        track_args['half'] = True  # Enable FP16 inference
+            except:
+                pass
+        
+        results = self.yolo.track(frame, **track_args)
         
         if results and len(results) > 0:
             result = results[0]
