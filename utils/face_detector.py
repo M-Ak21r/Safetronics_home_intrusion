@@ -50,7 +50,7 @@ class FaceDetector:
                         print(f"✓ DNN face detector loaded with CUDA acceleration")
                     else:
                         print(f"DNN face detector loaded successfully (CPU)")
-                except:
+                except (AttributeError, cv2.error):
                     # CUDA not available for OpenCV DNN, use CPU
                     print(f"DNN face detector loaded successfully (CPU)")
             else:

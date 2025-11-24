@@ -81,6 +81,7 @@ def test_gpu_availability():
     
     try:
         import torch
+        import config
         if torch.cuda.is_available() and config.USE_GPU:
             print("✓ System is configured to use GPU acceleration")
             print("✓ Expected performance: Significantly improved FPS on RTX 3050")
@@ -97,7 +98,8 @@ def test_gpu_availability():
             print("  1. Install CUDA toolkit (11.8 or 12.x)")
             print("  2. Ensure PyTorch with CUDA is installed")
             print("  3. Set USE_GPU=True in config.py (already set)")
-    except:
+    except (ImportError, AttributeError) as e:
+        print(f"⚠️  Could not complete summary: {e}")
         pass
     
     print("="*60)

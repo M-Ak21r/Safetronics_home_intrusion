@@ -33,7 +33,8 @@ FRAME_WIDTH = 640  # Optimized resolution for better FPS (480p)
 FRAME_HEIGHT = 480  # Optimized resolution for better FPS (480p)
 FPS = 30
 # Video capture optimization
-VIDEO_BACKEND = None  # Use None for default, or cv2.CAP_DSHOW (Windows), cv2.CAP_V4L2 (Linux) for better performance
+# VIDEO_BACKEND options: None (default), 1400 (CAP_DSHOW on Windows), 200 (CAP_V4L2 on Linux)
+VIDEO_BACKEND = None  # Use None for default backend, or specify backend code for platform-specific optimization
 
 # Logging
 LOG_DIR = "logs"

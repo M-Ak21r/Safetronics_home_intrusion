@@ -13,6 +13,14 @@ from utils.face_detector import FaceDetector
 from utils.logger import TheftLogger
 import config
 
+# Import torch for GPU acceleration if available
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
+
 
 class TrackedPerson:
     """Represents a tracked person"""
@@ -118,9 +126,8 @@ class TheftDetector:
         self.yolo = YOLO(self.model_path)
         
         # Configure for GPU if available and enabled
-        if config.USE_GPU:
+        if config.USE_GPU and TORCH_AVAILABLE:
             try:
-                import torch
                 if torch.cuda.is_available():
                     # Force model to GPU
                     self.yolo.to('cuda')
@@ -134,7 +141,10 @@ class TheftDetector:
             except Exception as e:
                 print(f"⚠️  Error configuring GPU: {e}. Using CPU.")
         else:
-            print("Using CPU for inference")
+            if config.USE_GPU and not TORCH_AVAILABLE:
+                print("⚠️  GPU requested but torch not available. Using CPU.")
+            else:
+                print("Using CPU for inference")
         
         # Initialize face detector
         self.face_detector = FaceDetector(
@@ -325,14 +335,14 @@ class TheftDetector:
         }
         
         # Add GPU-specific optimizations
-        if config.USE_GPU:
+        if config.USE_GPU and TORCH_AVAILABLE:
             try:
-                import torch
                 if torch.cuda.is_available():
                     track_args['device'] = 'cuda'
                     if config.USE_FP16:
                         track_args['half'] = True  # Enable FP16 inference
-            except:
+            except (RuntimeError, AttributeError) as e:
+                # GPU initialization failed, continue with CPU
                 pass
         
         results = self.yolo.track(frame, **track_args)
