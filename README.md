@@ -26,9 +26,10 @@ A real-time computer vision project built for Raspberry Pi to detect home intrus
 ## System Requirements
 
 ### Hardware
-- Raspberry Pi 4 (4GB+ RAM recommended) or any Linux/Windows/Mac computer
-- USB Camera or Raspberry Pi Camera Module
+- PC/Desktop with Windows/Linux/Mac (optimized for desktop performance)
+- USB Webcam or built-in camera
 - Minimum 8GB storage for evidence and models
+- GPU recommended for best performance (CUDA-compatible for NVIDIA GPUs)
 
 ### Software
 - Python 3.8 or higher
@@ -221,16 +222,19 @@ Frame: 245 | Objects: 3 | Persons: 1
 
 ## Performance Tips
 
-### For Raspberry Pi
-- Use YOLOv8 nano model (`yolov8n.pt`) for better performance
-- Reduce frame resolution in config.py
-- Use Haar Cascade face detection instead of DNN
-- Increase face detection interval (`FACE_DETECTION_INTERVAL`)
+### Current Configuration (Optimized for PC)
+The system is now optimized for PC/Desktop use with:
+- YOLOv8 medium model (`yolov8m.pt`) for excellent precision
+- 1280x720 resolution for detailed detection
+- DNN face detection for maximum accuracy
+- Face detection every frame
 
-### For Desktop/Server
-- Use larger YOLOv8 models (`yolov8s.pt`, `yolov8m.pt`) for better accuracy
-- Use DNN face detection for higher accuracy
-- Increase frame resolution for better detection
+### For Raspberry Pi (if needed)
+To optimize for Raspberry Pi, modify `config.py`:
+- Use YOLOv8 nano model (`yolov8n.pt`) for better performance
+- Reduce frame resolution to 640x480
+- Use Haar Cascade face detection instead of DNN
+- Increase face detection interval to 3 frames (`FACE_DETECTION_INTERVAL = 3`)
 
 ## Troubleshooting
 
