@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# Evidence and logs (exclude from git)
+logs/*.json
+logs/*.jsonl
+logs/*.txt
+evidence/faces/*.jpg
+evidence/faces/*.png
+evidence/frames/*.jpg
+evidence/frames/*.png
+
+# Models (large files)
+models/*.pt
+models/*.weights
+models/*.cfg
+models/*.caffemodel
+models/*.prototxt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test directories
+/tmp/test_*
