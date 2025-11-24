@@ -14,6 +14,26 @@ from utils.logger import TheftLogger
 import config
 
 
+class TrackedPerson:
+    """Represents a tracked person"""
+    
+    def __init__(self, track_id: int, bbox: Tuple[float, float, float, float], confidence: float):
+        self.track_id = track_id
+        self.confidence = confidence
+        self.last_bbox = bbox
+        self.last_position = calculate_center(bbox)
+        self.is_thief = False  # Marked as thief when nearby object disappears
+        self.first_seen = datetime.now()
+        self.last_seen = datetime.now()
+    
+    def update(self, bbox: Tuple[float, float, float, float], confidence: float):
+        """Update person with new detection"""
+        self.last_bbox = bbox
+        self.last_position = calculate_center(bbox)
+        self.confidence = confidence
+        self.last_seen = datetime.now()
+
+
 class TrackedObject:
     """Represents a tracked object with its history"""
     
@@ -29,6 +49,7 @@ class TrackedObject:
         self.missing_frames = 0
         self.is_filtered = False  # Overlaps with person
         self.total_displacement = 0.0
+        self.is_being_stolen = False  # Object is being stolen
     
     def update(self, bbox: Tuple[float, float, float, float], confidence: float):
         """Update object with new detection"""
@@ -89,6 +110,7 @@ class TheftDetector:
         
         # Tracking state
         self.tracked_objects: Dict[int, TrackedObject] = {}
+        self.tracked_persons: Dict[int, TrackedPerson] = {}
         self.person_boxes: List[Tuple[float, float, float, float]] = []
         self.frame_count = 0
         
@@ -145,6 +167,29 @@ class TheftDetector:
             filtered.append(is_filtered)
         
         return filtered
+    
+    def _find_nearby_persons(self, object_box: Tuple[float, float, float, float]) -> List[int]:
+        """
+        Find tracked persons near an object location
+        
+        Args:
+            object_box: Object bounding box (x1, y1, x2, y2)
+            
+        Returns:
+            List of person track IDs that are nearby
+        """
+        nearby_person_ids = []
+        object_center = calculate_center(object_box)
+        
+        for person_id, person in self.tracked_persons.items():
+            person_center = person.last_position
+            distance = calculate_distance(object_center, person_center)
+            
+            # Check if person is within threshold distance
+            if distance <= config.THIEF_PROXIMITY_THRESHOLD:
+                nearby_person_ids.append(person_id)
+        
+        return nearby_person_ids
     
     def _detect_faces_nearby(self, frame: np.ndarray, 
                             object_box: Tuple[float, float, float, float],
@@ -220,30 +265,22 @@ class TheftDetector:
         annotated_frame = frame.copy()
         theft_events = []
         
-        # Run YOLOv8 tracking
+        # Run YOLOv8 tracking with optimized parameters for better precision
         results = self.yolo.track(
             frame,
             persist=True,
             conf=config.CONFIDENCE_THRESHOLD,
-            verbose=False
+            iou=config.NMS_IOU_THRESHOLD,
+            verbose=False,
+            tracker="bytetrack.yaml"
         )
         
         if results and len(results) > 0:
             result = results[0]
             
-            # Extract person boxes first
-            self.person_boxes = []
-            if result.boxes is not None:
-                for i, box in enumerate(result.boxes):
-                    cls_id = int(box.cls[0])
-                    class_name = self.yolo.names[cls_id]
-                    
-                    if class_name == "person":
-                        xyxy = box.xyxy[0].cpu().numpy()
-                        self.person_boxes.append(tuple(xyxy))
-            
             # Process all detections
-            current_tracks = set()
+            current_object_tracks = set()
+            current_person_tracks = set()
             
             if result.boxes is not None and result.boxes.id is not None:
                 # Get detection data
@@ -252,14 +289,57 @@ class TheftDetector:
                 class_ids = result.boxes.cls.cpu().numpy().astype(int)
                 track_ids = result.boxes.id.cpu().numpy().astype(int)
                 
+                # First pass: collect person boxes for filtering
+                self.person_boxes = []
+                for i in range(len(boxes)):
+                    cls_id = class_ids[i]
+                    class_name = self.yolo.names[cls_id]
+                    if class_name == "person":
+                        self.person_boxes.append(tuple(boxes[i]))
+                
                 # Filter detections overlapping with persons
-                detections_data = [(boxes[i], confidences[i], class_ids[i], track_ids[i]) 
-                                  for i in range(len(boxes))]
                 filtered_flags = self._filter_overlapping_with_persons(boxes)
                 
-                # Update tracked objects
-                for i, (box, conf, cls_id, track_id) in enumerate(detections_data):
+                # Second pass: update persons
+                for i in range(len(boxes)):
+                    cls_id = class_ids[i]
                     class_name = self.yolo.names[cls_id]
+                    track_id = track_ids[i]
+                    bbox = tuple(boxes[i])
+                    conf = float(confidences[i])
+                    
+                    if class_name == "person":
+                        current_person_tracks.add(track_id)
+                        
+                        # Update or create tracked person
+                        if track_id in self.tracked_persons:
+                            person = self.tracked_persons[track_id]
+                            person.update(bbox, conf)
+                        else:
+                            person = TrackedPerson(track_id, bbox, conf)
+                            self.tracked_persons[track_id] = person
+                        
+                        # Draw person bounding box
+                        if config.DRAW_BOXES:
+                            x1, y1, x2, y2 = map(int, bbox)
+                            # Red if thief, green if normal person
+                            color = config.COLOR_THIEF if person.is_thief else config.COLOR_PERSON
+                            thickness = 3 if person.is_thief else 2
+                            cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
+                            
+                            label = f"Person #{track_id}"
+                            if person.is_thief:
+                                label += " [THIEF]"
+                            cv2.putText(annotated_frame, label, (x1, y1 - 10),
+                                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                # Third pass: update objects
+                for i in range(len(boxes)):
+                    cls_id = class_ids[i]
+                    class_name = self.yolo.names[cls_id]
+                    track_id = track_ids[i]
+                    bbox = tuple(boxes[i])
+                    conf = float(confidences[i])
                     
                     # Skip person class
                     if class_name in config.IGNORE_CLASSES:
@@ -269,28 +349,34 @@ class TheftDetector:
                     if config.TRACKED_CLASSES and class_name not in config.TRACKED_CLASSES:
                         continue
                     
-                    current_tracks.add(track_id)
-                    bbox = tuple(box)
+                    current_object_tracks.add(track_id)
                     
                     # Update or create tracked object
                     if track_id in self.tracked_objects:
                         obj = self.tracked_objects[track_id]
-                        obj.update(bbox, float(conf))
+                        obj.update(bbox, conf)
                         obj.is_filtered = filtered_flags[i]
                     else:
-                        obj = TrackedObject(track_id, class_name, bbox, float(conf))
+                        obj = TrackedObject(track_id, class_name, bbox, conf)
                         obj.is_filtered = filtered_flags[i]
                         self.tracked_objects[track_id] = obj
                     
-                    # Draw bounding box
+                    # Check if object is being stolen (overlapping with person)
+                    obj.is_being_stolen = obj.is_filtered
+                    
+                    # Draw object bounding box
                     if config.DRAW_BOXES:
                         x1, y1, x2, y2 = map(int, bbox)
-                        color = (0, 255, 0) if not obj.is_filtered else (128, 128, 128)
+                        # Use blue for objects, gray for filtered (held by person)
+                        if obj.is_being_stolen:
+                            color = config.COLOR_FILTERED
+                        else:
+                            color = config.COLOR_OBJECT
                         cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
                         
                         label = f"{class_name} #{track_id}"
                         if obj.is_filtered:
-                            label += " [F]"
+                            label += " [Held]"
                         cv2.putText(annotated_frame, label, (x1, y1 - 10),
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                     
@@ -298,11 +384,11 @@ class TheftDetector:
                     if config.DRAW_TRACKS and len(obj.positions) > 1:
                         points = [(int(x), int(y)) for x, y in obj.positions[-20:]]
                         for j in range(len(points) - 1):
-                            cv2.line(annotated_frame, points[j], points[j+1], (255, 0, 0), 2)
+                            cv2.line(annotated_frame, points[j], points[j+1], color, 1)
             
             # Mark missing objects
             for track_id in self.tracked_objects.keys():
-                if track_id not in current_tracks:
+                if track_id not in current_object_tracks:
                     self.tracked_objects[track_id].mark_missing()
             
             # Check for theft events (separate from deletion loop)
@@ -311,19 +397,30 @@ class TheftDetector:
                 event_type = self._check_theft_conditions(obj, frame)
                 
                 if event_type:
+                    # Find nearby persons and mark as thieves if object disappeared
+                    nearby_persons = self._find_nearby_persons(obj.last_bbox)
+                    
+                    if event_type == "disappearance" and nearby_persons:
+                        # Mark nearby persons as thieves
+                        for person_id in nearby_persons:
+                            if person_id in self.tracked_persons:
+                                self.tracked_persons[person_id].is_thief = True
+                                print(f"🚨 Person #{person_id} marked as THIEF - {obj.class_name} #{track_id} disappeared nearby")
+                    
                     # Detect nearby faces (every N frames for performance)
                     nearby_faces = []
                     if self.frame_count % config.FACE_DETECTION_INTERVAL == 0:
                         nearby_faces = self._detect_faces_nearby(frame, obj.last_bbox)
                     
-                    # Log theft event only if face detected nearby
-                    if nearby_faces:
+                    # Log theft event only if face detected nearby or person marked as thief
+                    if nearby_faces or nearby_persons:
                         object_info = {
                             "track_id": obj.track_id,
                             "class_name": obj.class_name,
                             "confidence": obj.confidence,
                             "bbox": obj.last_bbox,
-                            "displacement": obj.get_displacement()
+                            "displacement": obj.get_displacement(),
+                            "nearby_persons": nearby_persons
                         }
                         
                         event_id = self.logger.log_theft_event(
@@ -337,14 +434,19 @@ class TheftDetector:
                             "event_id": event_id,
                             "event_type": event_type,
                             "object": object_info,
-                            "faces_count": len(nearby_faces)
+                            "faces_count": len(nearby_faces),
+                            "thief_persons": nearby_persons
                         })
                         
                         print(f"⚠️  THEFT DETECTED: {event_type} - {obj.class_name} #{obj.track_id} "
-                              f"(displacement: {obj.get_displacement():.1f}px, faces: {len(nearby_faces)})")
+                              f"(displacement: {obj.get_displacement():.1f}px, faces: {len(nearby_faces)}, "
+                              f"nearby persons: {len(nearby_persons)})")
                         
                         # Draw alert on frame
-                        cv2.putText(annotated_frame, f"THEFT: {event_type.upper()}!",
+                        alert_text = f"THEFT: {event_type.upper()}!"
+                        if nearby_persons:
+                            alert_text += f" - Person(s) {nearby_persons}"
+                        cv2.putText(annotated_frame, alert_text,
                                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
                     
                     # Mark object for removal if it's been missing too long
