@@ -1,0 +1,12 @@
+# Ultralytics YOLO ByteTrack Configuration
+# Optimized for persistent object tracking with reduced box flickering
+
+tracker_type: bytetrack
+
+# ByteTrack parameters optimized for stability
+track_high_thresh: 0.5    # Threshold for detection to start new track
+track_low_thresh: 0.1     # Lower threshold for matching existing tracks (reduced to keep tracking)
+new_track_thresh: 0.6     # Threshold to create new track (higher to avoid duplicates)
+track_buffer: 60          # Increased buffer to maintain tracks longer during occlusions
+match_thresh: 0.8         # Matching threshold for track association
+fuse_score: True          # Fuse detection score with track score

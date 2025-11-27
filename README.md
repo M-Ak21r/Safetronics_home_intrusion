@@ -1,25 +1,39 @@
 # Safetronics Home Intrusion Detection System
 
-A real-time computer vision project built for Raspberry Pi to detect home intrusion, security breaches, and theft using advanced object tracking and face detection.
+A real-time computer vision project for detecting theft using stationary object monitoring and hand-based theft detection.
 
 ## Features
 
-### 🎯 Real-Time Theft Detection
-- **YOLOv8 Object Tracking**: Tracks multiple objects simultaneously with unique IDs
-- **Person Filtering**: Automatically ignores objects being held or overlapping with detected persons
-- **Displacement Detection**: Triggers alerts when objects move beyond a threshold distance
-- **Disappearance Detection**: Detects when tracked objects suddenly disappear from view
+### 🎯 Stationary Object Monitoring
+- **YOLOv8 Object Detection**: Uses YOLOv8m (medium model) for balanced accuracy and speed
+- **Stationary Detection**: Objects become monitored after remaining stable for a configurable period
+- **Hitbox Creation**: Expanded detection zones (hitboxes) around stationary objects
+- **Continuous Monitoring**: Tracks all detected objects in the scene
 
-### 👤 Face Detection
+### ✋ Hand-Based Theft Detection
+- **Hand Region Estimation**: Estimates hand positions based on person bounding boxes
+- **Hitbox Intrusion Detection**: Triggers alerts when a person's hand enters an object's hitbox
+- **Immediate Response**: Detects theft attempts in real-time
+- **Person Identification**: Tracks and marks persons who attempt theft
+
+### 👤 Person Tracking
 - **Dual Detection Methods**: 
   - DNN-based face detection (high accuracy)
   - Haar Cascade fallback (lightweight)
-- **Proximity-Based Triggering**: Only logs theft events when faces are detected nearby
 - **Face Cropping**: Automatically saves cropped face images as evidence
+- **Thief Marking**: Marks persons as thieves when their hand enters a hitbox
+- **Evidence Collection**: Captures person images at moment of theft attempt
+
+### ⚡ Multithreading Support
+- **Parallel Frame Processing**: Separate threads for capture and processing
+- **Thread-Safe Frame Buffer**: Efficient frame queue management
+- **Non-Blocking Display**: Smooth video display even during heavy processing
+- **Configurable Queue Size**: Adjustable buffer for different hardware capabilities
 
 ### 📊 Evidence & Logging
-- **Annotated Frames**: Saves full frames with bounding boxes and tracking information
+- **Annotated Frames**: Saves full frames with bounding boxes, hitboxes, and alerts
 - **Face Crops**: Stores individual face images from theft events
+- **Person Captures**: Saves images of persons who attempted theft
 - **JSON Logs**: Comprehensive event logs with timestamps, object info, and file references
 - **Organized Storage**: Separate directories for logs, faces, and frames
 
@@ -87,11 +101,11 @@ python main.py --source 1
 ```bash
 python main.py \
   --source 0 \
-  --model yolov8x.pt \
+  --model yolov8m.pt \
   --displacement-threshold 150 \
   --disappearance-frames 45 \
   --face-method dnn \
-  --confidence 0.65
+  --confidence 0.5
 ```
 
 ### Command Line Arguments
@@ -99,12 +113,12 @@ python main.py \
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `--source` | Video source (camera index or file path) | 0 |
-| `--model` | YOLOv8 model path | yolov8x.pt |
+| `--model` | YOLOv8 model path | yolov8m.pt |
 | `--displacement-threshold` | Displacement threshold in pixels | 100 |
 | `--disappearance-frames` | Frames before disappearance alert | 30 |
 | `--face-method` | Face detection method (dnn/haar) | dnn |
 | `--no-display` | Disable video display window | False |
-| `--confidence` | YOLO confidence threshold | 0.65 |
+| `--confidence` | YOLO confidence threshold | 0.5 |
 
 ### Controls
 - Press `q` to quit the application
@@ -116,50 +130,65 @@ Edit `config.py` to customize detection parameters:
 
 ```python
 # Detection thresholds
-DISPLACEMENT_THRESHOLD = 100  # pixels
-DISAPPEARANCE_FRAMES = 30      # frames
-CONFIDENCE_THRESHOLD = 0.65    # YOLO confidence
+CONFIDENCE_THRESHOLD = 0.5     # YOLO confidence threshold
+
+# Stationary object settings
+STATIONARY_THRESHOLD = 5       # pixels - max movement to be considered stationary
+STATIONARY_FRAMES = 30         # frames - how long object must be stable
+HITBOX_MARGIN = 50             # pixels - expansion margin around object
 
 # Face detection
 FACE_DETECTION_METHOD = "dnn"  # "dnn" or "haar"
 FACE_CONFIDENCE_THRESHOLD = 0.7
 
 # Model paths
-YOLO_MODEL = "yolov8x.pt"  # Best model for maximum accuracy
+YOLO_MODEL = "yolov8m.pt"      # Medium model - balanced accuracy and speed
+
+# Display settings
+DRAW_HITBOXES = True           # Show hitboxes around stationary objects
+DRAW_HAND_REGIONS = False      # Show estimated hand regions (for debugging)
+
+# Multithreading settings
+ENABLE_MULTITHREADING = True   # Enable for faster processing
+FRAME_QUEUE_SIZE = 8           # Size of frame buffer
 ```
 
 ## How It Works
 
 ### 1. Object Detection & Tracking
-- YOLOv8 detects and tracks objects in each frame
+- YOLOv8 detects objects in each frame
 - Each object receives a unique tracking ID
-- Object positions are recorded over time
+- Objects are monitored for stability
 
-### 2. Person Filtering
-- System identifies all "person" detections
-- Calculates IoU (Intersection over Union) between objects and person boxes
-- Objects overlapping with persons (IoU > 0.5) are filtered out
-- Prevents false alarms from people carrying items
+### 2. Stationary Object Detection
+- System tracks object movement over time
+- When object remains stable (< 5px movement) for 30 frames, it's marked as "stationary"
+- A hitbox (expanded detection zone) is created around stationary objects
+- Hitbox margin is configurable (default: 50px expansion)
 
-### 3. Theft Detection
-Two conditions trigger theft alerts:
+### 3. Hand Detection
+- System tracks all persons in the frame
+- Hand regions are estimated based on person bounding box
+- Hand positions are approximated at ~40-75% of person height, extending beyond body width
 
-**Displacement**: Object moves beyond threshold distance
-- Tracks object center point over time
-- Calculates total displacement from first detection
-- Triggers when displacement > threshold (default: 100px)
+### 4. Theft Detection
+**Hand-in-Hitbox Detection**:
+- Continuously checks if any person's hand region overlaps with a stationary object's hitbox
+- If overlap is detected → **THEFT ATTEMPT**
+- Person is immediately marked as "thief"
+- Alert is displayed on screen
 
-**Disappearance**: Object missing for extended period
-- Counts frames where tracked object is not detected
-- Triggers when missing_frames > threshold (default: 30 frames)
-
-### 4. Face Detection & Evidence
-- When theft detected, system searches for nearby faces
-- Only logs event if face(s) detected (indicates human involvement)
-- Saves:
-  - Annotated frame showing the scene
-  - Cropped face images
-  - JSON log with all metadata
+### 5. Evidence Collection
+- When theft detected:
+  - Annotated frame is saved showing the scene
+  - Faces are detected and cropped
+  - Person images are captured
+  - JSON log is created with all metadata
+- Evidence includes:
+  - Object hitbox location
+  - Person ID involved
+  - Timestamp
+  - Face/person images
 
 ## Project Structure
 
@@ -222,19 +251,28 @@ Frame: 245 | Objects: 3 | Persons: 1
 
 ## Performance Tips
 
-### Current Configuration (Optimized for PC - Best Model)
-The system is now optimized for PC/Desktop use with the best available model:
-- **YOLOv8 extra-large model (`yolov8x.pt`)** - Highest accuracy available
+### Current Configuration (Optimized for PC with Multithreading)
+The system is now optimized for PC/Desktop use with balanced performance:
+- **YOLOv8 medium model (`yolov8m.pt`)** - Good balance of accuracy and speed
+- **Multithreading enabled** - Separate capture and processing threads
 - 1280x720 resolution for detailed detection
 - DNN face detection for maximum accuracy
 - Face detection every frame
-- Confidence threshold: 0.65
+- Confidence threshold: 0.5
+- Velocity-based tracking prediction
 
-**Note:** YOLOv8x provides the best detection accuracy but requires more computational power. Recommended for systems with dedicated GPU.
+**Note:** YOLOv8m provides a good balance between detection accuracy and processing speed. Multithreading enables smooth operation even on systems without dedicated GPU.
+
+### For High-End Systems
+To maximize accuracy with GPU acceleration:
+- Use YOLOv8 extra-large model (`yolov8x.pt`) for highest accuracy
+- Increase frame resolution to 1920x1080
+- Keep multithreading enabled
 
 ### For Lower-End Systems
 To optimize for systems without GPU or Raspberry Pi, modify `config.py`:
 - Use YOLOv8 small model (`yolov8s.pt`) or nano (`yolov8n.pt`) for better performance
+- Set `ENABLE_MULTITHREADING = False` if experiencing issues
 - Reduce frame resolution to 640x480
 - Use Haar Cascade face detection instead of DNN
 - Increase face detection interval to 3 frames (`FACE_DETECTION_INTERVAL = 3`)
