@@ -142,6 +142,7 @@ def test_tracked_object():
     print("\nTesting TrackedObject...")
     try:
         from theft_detector import TrackedObject
+        import config
         
         # Create tracked object
         obj = TrackedObject(track_id=1, class_name="bottle", 
@@ -152,14 +153,110 @@ def test_tracked_object():
         obj.update((150, 150, 250, 250), 0.90)
         print(f"  ✓ Object updated, displacement: {obj.get_displacement():.1f}px")
         
+        # Test velocity calculation
+        assert obj.velocity != (0.0, 0.0), "Velocity should be non-zero after movement"
+        print(f"  ✓ Velocity calculated: {obj.velocity}")
+        
         # Test missing frames
         obj.mark_missing()
         assert obj.missing_frames == 1, "Missing frames counter incorrect"
         print("  ✓ Missing frames tracking works")
         
+        # Test predicted bbox
+        pred_bbox = obj.get_current_bbox()
+        assert pred_bbox is not None, "Predicted bbox should not be None"
+        print(f"  ✓ Predicted bbox: {pred_bbox}")
+        
+        # Test out of scope detection
+        is_out = obj.check_out_of_scope(1280, 720)
+        print(f"  ✓ Out of scope check: {is_out}")
+        
+        # Test nearby person tracking
+        obj.add_nearby_person(42, 100)
+        assert len(obj.nearby_persons_history) == 1, "Nearby person should be recorded"
+        print("  ✓ Nearby person history tracking works")
+        
         return True
     except Exception as e:
         print(f"  ✗ TrackedObject test error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_tracked_person():
+    """Test TrackedPerson class"""
+    print("\nTesting TrackedPerson...")
+    try:
+        from theft_detector import TrackedPerson
+        
+        # Create tracked person
+        person = TrackedPerson(track_id=1, bbox=(100, 100, 200, 300), confidence=0.90)
+        print("  ✓ TrackedPerson created")
+        
+        # Test position update and velocity
+        person.update((110, 105, 210, 305), 0.92)
+        assert person.velocity != (0.0, 0.0), "Velocity should be calculated"
+        print(f"  ✓ Person velocity: {person.velocity}")
+        
+        # Test position prediction
+        person.mark_missing()
+        pred_pos = person.predict_position()
+        assert pred_pos is not None, "Predicted position should not be None"
+        print(f"  ✓ Predicted position: {pred_pos}")
+        
+        # Test thief marking
+        person.mark_as_thief(100)
+        assert person.is_thief == True, "Person should be marked as thief"
+        print("  ✓ Thief marking works")
+        
+        return True
+    except Exception as e:
+        print(f"  ✗ TrackedPerson test error: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_frame_buffer():
+    """Test FrameBuffer class for multithreading"""
+    print("\nTesting FrameBuffer...")
+    try:
+        from theft_detector import FrameBuffer
+        import numpy as np
+        
+        buffer = FrameBuffer(maxsize=3)
+        print("  ✓ FrameBuffer created")
+        
+        # Test putting frames
+        frame1 = np.zeros((480, 640, 3), dtype=np.uint8)
+        frame2 = np.ones((480, 640, 3), dtype=np.uint8) * 128
+        
+        buffer.put(frame1, 1)
+        buffer.put(frame2, 2)
+        print("  ✓ Frames added to buffer")
+        
+        # Test getting frames
+        result = buffer.get(timeout=0.1)
+        assert result is not None, "Should get frame from buffer"
+        assert result[1] == 1, "Should get first frame"
+        print("  ✓ Frame retrieval works")
+        
+        # Test get latest
+        latest = buffer.get_latest()
+        assert latest is not None, "Latest frame should exist"
+        assert latest[1] == 2, "Latest should be frame 2"
+        print("  ✓ Get latest frame works")
+        
+        # Test clear
+        buffer.clear()
+        empty_result = buffer.get(timeout=0.1)
+        assert empty_result is None, "Buffer should be empty after clear"
+        print("  ✓ Buffer clear works")
+        
+        return True
+    except Exception as e:
+        print(f"  ✗ FrameBuffer test error: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -179,6 +276,24 @@ def test_config():
         print(f"    - Displacement threshold: {config.DISPLACEMENT_THRESHOLD}px")
         print(f"    - Disappearance frames: {config.DISAPPEARANCE_FRAMES}")
         print(f"    - YOLO model: {config.YOLO_MODEL}")
+        
+        # Check new tracking optimization config
+        assert hasattr(config, 'TRACK_BUFFER'), "Missing TRACK_BUFFER"
+        assert hasattr(config, 'PREDICTION_FRAMES'), "Missing PREDICTION_FRAMES"
+        assert hasattr(config, 'OUT_OF_SCOPE_FRAMES'), "Missing OUT_OF_SCOPE_FRAMES"
+        print(f"    - Track buffer: {config.TRACK_BUFFER} frames")
+        print(f"    - Prediction frames: {config.PREDICTION_FRAMES}")
+        print(f"    - Out of scope frames: {config.OUT_OF_SCOPE_FRAMES}")
+        
+        # Check multithreading config
+        assert hasattr(config, 'ENABLE_MULTITHREADING'), "Missing ENABLE_MULTITHREADING"
+        assert hasattr(config, 'FRAME_QUEUE_SIZE'), "Missing FRAME_QUEUE_SIZE"
+        print(f"    - Multithreading: {'Enabled' if config.ENABLE_MULTITHREADING else 'Disabled'}")
+        print(f"    - Frame queue size: {config.FRAME_QUEUE_SIZE}")
+        
+        # Verify YOLOv8m model is configured
+        assert 'yolov8m' in config.YOLO_MODEL.lower(), "Should use YOLOv8m model"
+        print("  ✓ YOLOv8m model configured")
         
         return True
     except Exception as e:
@@ -201,6 +316,8 @@ def main():
         ("Face Detector", test_face_detector),
         ("Logger", test_logger),
         ("Tracked Object", test_tracked_object),
+        ("Tracked Person", test_tracked_person),
+        ("Frame Buffer", test_frame_buffer),
     ]
     
     results = []
