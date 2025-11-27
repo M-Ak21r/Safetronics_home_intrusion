@@ -1,6 +1,7 @@
 """
-Core theft detection module using YOLOv8 object tracking and face detection
-with multithreading support for faster processing
+Core theft detection module using YOLOv8 object tracking and hand-based theft detection.
+Detects stationary objects, creates hitboxes around them, and triggers theft alerts
+when a person's hand enters the hitbox.
 """
 import cv2
 import numpy as np
@@ -12,64 +13,95 @@ import threading
 import queue
 import os
 
-from utils.geometry import calculate_iou, calculate_center, calculate_distance, xywh_to_xyxy
+from utils.geometry import calculate_iou, calculate_center, calculate_distance, xywh_to_xyxy, is_point_in_box
 from utils.face_detector import FaceDetector
 from utils.logger import TheftLogger
 import config
 
 
 class TrackedPerson:
-    """Represents a tracked person"""
+    """Represents a tracked person with hand detection for theft attempts"""
     
     def __init__(self, track_id: int, bbox: Tuple[float, float, float, float], confidence: float):
         self.track_id = track_id
         self.confidence = confidence
         self.last_bbox = bbox
         self.last_position = calculate_center(bbox)
-        self.positions = [self.last_position]  # Store position history for velocity estimation
-        self.is_thief = False  # Marked as thief when nearby object disappears
+        self.is_thief = False  # Marked as thief when hand enters hitbox
         self.thief_marked_frame = None  # Frame when marked as thief
         self.missing_frames = 0  # Count missing frames
         self.first_seen = datetime.now()
         self.last_seen = datetime.now()
-        self.velocity = (0.0, 0.0)  # Estimated velocity for prediction
         self.captured_image = None  # Store captured image when near object
+        self.hand_regions = []  # Store estimated hand regions (left and right)
+        self.theft_attempts = 0  # Count theft attempts
+        
+        # Estimate hand regions immediately
+        self._estimate_hand_regions()
     
     def update(self, bbox: Tuple[float, float, float, float], confidence: float):
         """Update person with new detection"""
-        old_position = self.last_position
         self.last_bbox = bbox
         self.last_position = calculate_center(bbox)
         self.confidence = confidence
         self.last_seen = datetime.now()
         self.missing_frames = 0
         
-        # Update velocity estimation
-        self.velocity = (
-            self.last_position[0] - old_position[0],
-            self.last_position[1] - old_position[1]
+        # Estimate hand regions based on person bounding box
+        self._estimate_hand_regions()
+    
+    def _estimate_hand_regions(self):
+        """Estimate hand regions from person bounding box"""
+        if self.last_bbox is None:
+            self.hand_regions = []
+            return
+        
+        x1, y1, x2, y2 = self.last_bbox
+        width = x2 - x1
+        height = y2 - y1
+        
+        # Hands are typically at sides, around 60-80% down from top of person box
+        # and extend outside the body width
+        hand_y_start = y1 + height * 0.4  # Start from 40% down
+        hand_y_end = y1 + height * 0.75   # End at 75% down
+        
+        hand_width = width * 0.3  # Hand region width
+        
+        # Left hand region (extends to left of person)
+        left_hand = (
+            x1 - hand_width,          # x1
+            hand_y_start,             # y1
+            x1 + width * 0.2,         # x2
+            hand_y_end                # y2
         )
         
-        # Keep position history
-        self.positions.append(self.last_position)
-        if len(self.positions) > config.MAX_POSITION_HISTORY:
-            self.positions = self.positions[-config.MAX_POSITION_HISTORY:]
+        # Right hand region (extends to right of person)
+        right_hand = (
+            x2 - width * 0.2,         # x1
+            hand_y_start,             # y1
+            x2 + hand_width,          # x2
+            hand_y_end                # y2
+        )
+        
+        self.hand_regions = [left_hand, right_hand]
+    
+    def check_hand_in_hitbox(self, hitbox: Tuple[float, float, float, float]) -> bool:
+        """Check if any hand region overlaps with an object hitbox"""
+        for hand_region in self.hand_regions:
+            iou = calculate_iou(hand_region, hitbox)
+            if iou > 0:  # Any overlap counts
+                return True
+        return False
     
     def mark_as_thief(self, frame_count: int):
         """Mark person as thief"""
         self.is_thief = True
         self.thief_marked_frame = frame_count
+        self.theft_attempts += 1
     
     def mark_missing(self):
         """Mark person as missing in current frame"""
         self.missing_frames += 1
-    
-    def predict_position(self) -> Tuple[float, float]:
-        """Predict current position based on velocity"""
-        return (
-            self.last_position[0] + self.velocity[0] * self.missing_frames,
-            self.last_position[1] + self.velocity[1] * self.missing_frames
-        )
     
     def should_clear_thief_status(self, current_frame: int) -> bool:
         """Check if thief status should be cleared based on timeout"""
@@ -79,116 +111,97 @@ class TrackedPerson:
         return (current_frame - self.thief_marked_frame) > THIEF_STATUS_TIMEOUT
 
 
-class TrackedObject:
-    """Represents a tracked object with its history and velocity prediction"""
+class StationaryObject:
+    """Represents a stationary object being monitored with a hitbox for theft detection"""
     
     def __init__(self, track_id: int, class_name: str, bbox: Tuple[float, float, float, float],
                  confidence: float):
         self.track_id = track_id
         self.class_name = class_name
         self.confidence = confidence
-        self.positions = [calculate_center(bbox)]
-        self.last_bbox = bbox
+        self.bbox = bbox
+        self.hitbox = self._create_hitbox(bbox)  # Expanded hitbox for detection
+        self.initial_position = calculate_center(bbox)
         self.first_seen = datetime.now()
         self.last_seen = datetime.now()
         self.missing_frames = 0
-        self.is_filtered = False  # Overlaps with person
-        self.total_displacement = 0.0
-        self.is_being_stolen = False  # Object is being stolen
-        self.velocity = (0.0, 0.0)  # Velocity for prediction during occlusion
-        self.predicted_bbox = None  # Predicted bbox when temporarily lost
-        self.out_of_scope = False  # Flag for when object leaves camera view
-        self.nearby_persons_history = []  # Track persons who were near this object
+        self.is_stationary = False  # Becomes true after object is stable
+        self.position_history = [calculate_center(bbox)]
+        self.stability_frames = 0  # Count frames object has been stable
+        self.theft_attempts = []  # Record of theft attempts (person_id, frame, time)
+        self.is_being_touched = False  # Hand is currently in hitbox
+    
+    def _create_hitbox(self, bbox: Tuple[float, float, float, float]) -> Tuple[float, float, float, float]:
+        """Create expanded hitbox around object for hand detection"""
+        x1, y1, x2, y2 = bbox
+        
+        # Expand hitbox by configured margin
+        margin = config.HITBOX_MARGIN
+        return (
+            x1 - margin,
+            y1 - margin,
+            x2 + margin,
+            y2 + margin
+        )
     
     def update(self, bbox: Tuple[float, float, float, float], confidence: float):
         """Update object with new detection"""
-        center = calculate_center(bbox)
-        if len(self.positions) > 0:
-            displacement = calculate_distance(self.positions[-1], center)
-            self.total_displacement += displacement
-            
-            # Update velocity estimation
-            old_center = self.positions[-1]
-            self.velocity = (center[0] - old_center[0], center[1] - old_center[1])
+        old_center = calculate_center(self.bbox)
+        new_center = calculate_center(bbox)
         
-        self.positions.append(center)
-        self.last_bbox = bbox
-        self.predicted_bbox = None  # Clear prediction when detected
+        # Calculate displacement
+        displacement = calculate_distance(old_center, new_center)
+        
+        # Update position history
+        self.position_history.append(new_center)
+        if len(self.position_history) > config.MAX_POSITION_HISTORY:
+            self.position_history = self.position_history[-config.MAX_POSITION_HISTORY:]
+        
+        # Check if object is stationary (small movement)
+        if displacement < config.STATIONARY_THRESHOLD:
+            self.stability_frames += 1
+        else:
+            self.stability_frames = 0
+            self.is_stationary = False
+        
+        # Mark as stationary after enough stable frames
+        if self.stability_frames >= config.STATIONARY_FRAMES:
+            self.is_stationary = True
+        
+        self.bbox = bbox
+        self.hitbox = self._create_hitbox(bbox)
         self.confidence = confidence
         self.last_seen = datetime.now()
         self.missing_frames = 0
-        self.out_of_scope = False
-        
-        # Keep only recent positions for memory efficiency
-        from config import MAX_POSITION_HISTORY
-        if len(self.positions) > MAX_POSITION_HISTORY:
-            self.positions = self.positions[-MAX_POSITION_HISTORY:]
-    
-    def get_displacement(self) -> float:
-        """Calculate total displacement since first detection"""
-        if len(self.positions) < 2:
-            return 0.0
-        return calculate_distance(self.positions[0], self.positions[-1])
     
     def mark_missing(self):
         """Mark object as missing in current frame"""
         self.missing_frames += 1
-        
-        # Update predicted position
-        if self.missing_frames <= config.PREDICTION_FRAMES:
-            self._update_predicted_bbox()
     
-    def _update_predicted_bbox(self):
-        """Predict bbox based on velocity"""
-        if self.last_bbox is None:
-            return
-        
-        x1, y1, x2, y2 = self.last_bbox
-        vx, vy = self.velocity
-        
-        # Apply velocity to predict new position
-        pred_x1 = x1 + vx * self.missing_frames
-        pred_y1 = y1 + vy * self.missing_frames
-        pred_x2 = x2 + vx * self.missing_frames
-        pred_y2 = y2 + vy * self.missing_frames
-        
-        self.predicted_bbox = (pred_x1, pred_y1, pred_x2, pred_y2)
-    
-    def get_current_bbox(self) -> Tuple[float, float, float, float]:
-        """Get current or predicted bbox"""
-        if self.missing_frames > 0 and self.predicted_bbox is not None:
-            return self.predicted_bbox
-        return self.last_bbox
-    
-    def check_out_of_scope(self, frame_width: int, frame_height: int) -> bool:
-        """Check if object has moved out of camera scope"""
-        bbox = self.get_current_bbox()
-        if bbox is None:
-            return False
-        
-        x1, y1, x2, y2 = bbox
-        margin = 10  # pixels margin
-        
-        # Check if predicted position is outside frame boundaries
-        if x2 < margin or x1 > frame_width - margin:
-            self.out_of_scope = True
-            return True
-        if y2 < margin or y1 > frame_height - margin:
-            self.out_of_scope = True
-            return True
-        
-        return False
-    
-    def add_nearby_person(self, person_id: int, frame_count: int):
-        """Record a person who was near this object"""
-        self.nearby_persons_history.append({
+    def record_theft_attempt(self, person_id: int, frame_count: int):
+        """Record a theft attempt by a person"""
+        self.theft_attempts.append({
             'person_id': person_id,
             'frame': frame_count,
             'timestamp': datetime.now()
         })
-        # Keep only recent history
-        if len(self.nearby_persons_history) > 50:
-            self.nearby_persons_history = self.nearby_persons_history[-50:]
+        # Keep only recent attempts
+        if len(self.theft_attempts) > 50:
+            self.theft_attempts = self.theft_attempts[-50:]
+    
+    def get_recent_theft_attempts(self, within_frames: int = 30) -> List[Dict]:
+        """Get recent theft attempts within frame window"""
+        if not self.theft_attempts:
+            return []
+        
+        current_time = datetime.now()
+        recent = []
+        for attempt in self.theft_attempts:
+            # Consider attempts within last few seconds
+            time_diff = (current_time - attempt['timestamp']).total_seconds()
+            if time_diff < 5:  # Within 5 seconds
+                recent.append(attempt)
+        return recent
 
 
 class FrameBuffer:
@@ -255,7 +268,7 @@ class FrameBuffer:
 
 
 class TheftDetector:
-    """Main theft detection system with multithreading support"""
+    """Main theft detection system using hand-in-hitbox detection"""
     
     def __init__(self, model_path: str = None, video_source: Any = 0):
         """
@@ -282,10 +295,9 @@ class TheftDetector:
         # Initialize logger
         self.logger = TheftLogger(config.LOG_DIR, config.EVIDENCE_DIR)
         
-        # Tracking state
-        self.tracked_objects: Dict[int, TrackedObject] = {}
+        # Tracking state - use StationaryObject instead of TrackedObject
+        self.stationary_objects: Dict[int, StationaryObject] = {}
         self.tracked_persons: Dict[int, TrackedPerson] = {}
-        self.person_boxes: List[Tuple[float, float, float, float]] = []
         self.frame_count = 0
         self.frame_width = config.FRAME_WIDTH
         self.frame_height = config.FRAME_HEIGHT
@@ -478,46 +490,26 @@ class TheftDetector:
         
         return nearby_faces
     
-    def _check_theft_conditions(self, obj: TrackedObject, frame: np.ndarray) -> Optional[str]:
+    def _check_hand_in_hitbox(self, person: TrackedPerson, obj: StationaryObject) -> bool:
         """
-        Check if theft conditions are met for an object
+        Check if person's hand is inside object's hitbox
         
         Args:
-            obj: Tracked object
-            frame: Current frame
+            person: TrackedPerson to check
+            obj: StationaryObject with hitbox
             
         Returns:
-            Event type if theft detected, None otherwise
+            True if hand is in hitbox
         """
-        # Skip filtered objects (overlapping with persons)
-        if obj.is_filtered:
-            return None
-        
-        # Check for large displacement
-        displacement = obj.get_displacement()
-        if displacement > config.DISPLACEMENT_THRESHOLD:
-            return "displacement"
-        
-        # Check for out-of-scope (object left camera view)
-        if obj.missing_frames >= config.OUT_OF_SCOPE_FRAMES:
-            if obj.check_out_of_scope(self.frame_width, self.frame_height):
-                return "out_of_scope"
-        
-        # Check for disappearance
-        if obj.missing_frames >= config.DISAPPEARANCE_FRAMES:
-            return "disappearance"
-        
-        return None
+        return person.check_hand_in_hitbox(obj.hitbox)
     
-    def _capture_person_near_object(self, frame: np.ndarray, person: TrackedPerson,
-                                    obj: TrackedObject) -> Optional[np.ndarray]:
+    def _capture_person_image(self, frame: np.ndarray, person: TrackedPerson) -> Optional[np.ndarray]:
         """
-        Capture image of person who is near a tracked object
+        Capture image of person
         
         Args:
             frame: Current frame
-            person: TrackedPerson near the object
-            obj: TrackedObject being monitored
+            person: TrackedPerson to capture
             
         Returns:
             Cropped image of person or None
@@ -541,7 +533,7 @@ class TheftDetector:
     
     def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, List[Dict[str, Any]]]:
         """
-        Process a single frame for theft detection
+        Process a single frame for theft detection using hand-in-hitbox approach
         
         Args:
             frame: Input frame (BGR)
@@ -577,18 +569,7 @@ class TheftDetector:
                 class_ids = result.boxes.cls.cpu().numpy().astype(int)
                 track_ids = result.boxes.id.cpu().numpy().astype(int)
                 
-                # First pass: collect person boxes for filtering
-                self.person_boxes = []
-                for i in range(len(boxes)):
-                    cls_id = class_ids[i]
-                    class_name = self.yolo.names[cls_id]
-                    if class_name == "person":
-                        self.person_boxes.append(tuple(boxes[i]))
-                
-                # Filter detections overlapping with persons
-                filtered_flags = self._filter_overlapping_with_persons(boxes)
-                
-                # Second pass: update persons and track who is near objects
+                # First pass: update persons
                 for i in range(len(boxes)):
                     cls_id = class_ids[i]
                     class_name = self.yolo.names[cls_id]
@@ -606,20 +587,6 @@ class TheftDetector:
                         else:
                             person = TrackedPerson(track_id, bbox, conf)
                             self.tracked_persons[track_id] = person
-                        
-                        # Capture person image if near any tracked object
-                        person_center = person.last_position
-                        for obj_id, obj in self.tracked_objects.items():
-                            obj_center = calculate_center(obj.get_current_bbox())
-                            distance = calculate_distance(person_center, obj_center)
-                            if distance <= config.THIEF_PROXIMITY_THRESHOLD:
-                                # Record this person was near the object
-                                obj.add_nearby_person(track_id, self.frame_count)
-                                # Capture person image
-                                if person.captured_image is None:
-                                    person.captured_image = self._capture_person_near_object(
-                                        frame, person, obj
-                                    )
                         
                         # Clear thief status if timeout reached
                         if person.should_clear_thief_status(self.frame_count):
@@ -640,8 +607,15 @@ class TheftDetector:
                                 label += " [THIEF]"
                             cv2.putText(annotated_frame, label, (x1, y1 - 10),
                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                            
+                            # Draw hand regions if configured
+                            if config.DRAW_HAND_REGIONS:
+                                for hand_region in person.hand_regions:
+                                    hx1, hy1, hx2, hy2 = map(int, hand_region)
+                                    cv2.rectangle(annotated_frame, (hx1, hy1), (hx2, hy2), 
+                                                (255, 0, 255), 1)  # Magenta for hand regions
                 
-                # Third pass: update objects
+                # Second pass: update stationary objects
                 for i in range(len(boxes)):
                     cls_id = class_ids[i]
                     class_name = self.yolo.names[cls_id]
@@ -659,156 +633,128 @@ class TheftDetector:
                     
                     current_object_tracks.add(track_id)
                     
-                    # Update or create tracked object
-                    if track_id in self.tracked_objects:
-                        obj = self.tracked_objects[track_id]
+                    # Update or create stationary object
+                    if track_id in self.stationary_objects:
+                        obj = self.stationary_objects[track_id]
                         obj.update(bbox, conf)
-                        obj.is_filtered = filtered_flags[i]
                     else:
-                        obj = TrackedObject(track_id, class_name, bbox, conf)
-                        obj.is_filtered = filtered_flags[i]
-                        self.tracked_objects[track_id] = obj
-                    
-                    # Check if object is being stolen (overlapping with person)
-                    obj.is_being_stolen = obj.is_filtered
+                        obj = StationaryObject(track_id, class_name, bbox, conf)
+                        self.stationary_objects[track_id] = obj
                     
                     # Draw object bounding box
                     if config.DRAW_BOXES:
                         x1, y1, x2, y2 = map(int, bbox)
-                        # Use blue for objects, gray for filtered (held by person)
-                        if obj.is_being_stolen:
-                            color = config.COLOR_FILTERED
+                        # Blue for objects, cyan for stationary objects
+                        if obj.is_stationary:
+                            color = config.COLOR_STATIONARY
                         else:
                             color = config.COLOR_OBJECT
                         cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, 2)
                         
                         label = f"{class_name} #{track_id}"
-                        if obj.is_filtered:
-                            label += " [Held]"
+                        if obj.is_stationary:
+                            label += " [Stationary]"
+                        if obj.is_being_touched:
+                            label += " [TOUCHED!]"
                         cv2.putText(annotated_frame, label, (x1, y1 - 10),
                                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
                     
-                    # Draw track
-                    if config.DRAW_TRACKS and len(obj.positions) > 1:
-                        points = [(int(x), int(y)) for x, y in obj.positions[-20:]]
-                        for j in range(len(points) - 1):
-                            cv2.line(annotated_frame, points[j], points[j+1], color, 1)
+                    # Draw hitbox for stationary objects
+                    if config.DRAW_HITBOXES and obj.is_stationary:
+                        hx1, hy1, hx2, hy2 = map(int, obj.hitbox)
+                        # Draw hitbox with dashed line (yellow)
+                        color = config.COLOR_HITBOX
+                        thickness = 2
+                        dash_length = 10
+                        
+                        # Draw dashed rectangle
+                        for j in range(int(hx1), int(hx2), dash_length * 2):
+                            cv2.line(annotated_frame, (j, hy1), (min(j + dash_length, hx2), hy1), color, thickness)
+                            cv2.line(annotated_frame, (j, hy2), (min(j + dash_length, hx2), hy2), color, thickness)
+                        for j in range(int(hy1), int(hy2), dash_length * 2):
+                            cv2.line(annotated_frame, (hx1, j), (hx1, min(j + dash_length, hy2)), color, thickness)
+                            cv2.line(annotated_frame, (hx2, j), (hx2, min(j + dash_length, hy2)), color, thickness)
             
-            # Mark missing objects and persons, and draw predicted boxes
-            for track_id in list(self.tracked_objects.keys()):
+            # Mark missing objects and persons
+            for track_id in list(self.stationary_objects.keys()):
                 if track_id not in current_object_tracks:
-                    obj = self.tracked_objects[track_id]
-                    obj.mark_missing()
-                    
-                    # Draw predicted box for temporarily lost objects
-                    if config.DRAW_BOXES and obj.missing_frames <= config.PREDICTION_FRAMES:
-                        pred_bbox = obj.get_current_bbox()
-                        if pred_bbox is not None:
-                            x1, y1, x2, y2 = map(int, pred_bbox)
-                            # Draw dashed box for predicted position (orange color)
-                            color = (0, 165, 255)  # Orange for predicted
-                            # Draw dashed rectangle
-                            for j in range(0, int(x2-x1), 10):
-                                cv2.line(annotated_frame, (x1+j, y1), (min(x1+j+5, x2), y1), color, 2)
-                                cv2.line(annotated_frame, (x1+j, y2), (min(x1+j+5, x2), y2), color, 2)
-                            for j in range(0, int(y2-y1), 10):
-                                cv2.line(annotated_frame, (x1, y1+j), (x1, min(y1+j+5, y2)), color, 2)
-                                cv2.line(annotated_frame, (x2, y1+j), (x2, min(y1+j+5, y2)), color, 2)
-                            
-                            label = f"{obj.class_name} #{track_id} [Predicted]"
-                            cv2.putText(annotated_frame, label, (x1, y1 - 10),
-                                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    self.stationary_objects[track_id].mark_missing()
             
             for track_id in list(self.tracked_persons.keys()):
                 if track_id not in current_person_tracks:
                     self.tracked_persons[track_id].mark_missing()
             
-            # Check for theft events (separate from deletion loop)
-            objects_to_remove = []
-            for track_id, obj in self.tracked_objects.items():
-                event_type = self._check_theft_conditions(obj, frame)
+            # Check for theft attempts (hand in hitbox)
+            for obj_id, obj in self.stationary_objects.items():
+                # Only check stationary objects
+                if not obj.is_stationary:
+                    continue
                 
-                if event_type:
-                    # Find nearby persons from history and current proximity
-                    nearby_persons = self._find_nearby_persons(obj.get_current_bbox())
-                    
-                    # Also check historical nearby persons
-                    historical_persons = set(
-                        entry['person_id'] for entry in obj.nearby_persons_history
-                        if self.frame_count - entry['frame'] < config.DISAPPEARANCE_FRAMES
-                    )
-                    all_nearby_persons = list(set(nearby_persons) | historical_persons)
-                    
-                    if event_type in ("disappearance", "out_of_scope") and all_nearby_persons:
-                        # Mark nearby persons as thieves
-                        for person_id in all_nearby_persons:
-                            if person_id in self.tracked_persons:
-                                self.tracked_persons[person_id].mark_as_thief(self.frame_count)
-                                print(f"🚨 Person #{person_id} marked as THIEF - {obj.class_name} #{track_id} {event_type}")
-                    
-                    # Detect nearby faces (every N frames for performance)
-                    nearby_faces = []
-                    if self.frame_count % config.FACE_DETECTION_INTERVAL == 0:
-                        nearby_faces = self._detect_faces_nearby(frame, obj.get_current_bbox())
-                    
-                    # Collect person captures for evidence
-                    person_captures = []
-                    for person_id in all_nearby_persons:
-                        if person_id in self.tracked_persons:
-                            person = self.tracked_persons[person_id]
+                obj.is_being_touched = False
+                
+                # Check each person's hands against this object's hitbox
+                for person_id, person in self.tracked_persons.items():
+                    if self._check_hand_in_hitbox(person, obj):
+                        obj.is_being_touched = True
+                        
+                        # Record theft attempt
+                        obj.record_theft_attempt(person_id, self.frame_count)
+                        
+                        # Mark person as thief
+                        if not person.is_thief:
+                            person.mark_as_thief(self.frame_count)
+                            print(f"🚨 THEFT ATTEMPT: Person #{person_id} hand entered hitbox of {obj.class_name} #{obj_id}!")
+                            
+                            # Capture person image as evidence
+                            if person.captured_image is None:
+                                person.captured_image = self._capture_person_image(frame, person)
+                            
+                            # Detect face for evidence (throttled for performance)
+                            nearby_faces = []
+                            if self.frame_count % config.FACE_DETECTION_INTERVAL == 0:
+                                nearby_faces = self._detect_faces_nearby(frame, obj.bbox)
+                            
+                            # Log theft event
+                            object_info = {
+                                "track_id": obj.track_id,
+                                "class_name": obj.class_name,
+                                "confidence": obj.confidence,
+                                "bbox": obj.bbox,
+                                "hitbox": obj.hitbox,
+                                "person_id": person_id
+                            }
+                            
+                            evidence_images = nearby_faces
                             if person.captured_image is not None:
-                                person_captures.append(person.captured_image)
-                    
-                    # Log theft event if face detected, person marked as thief, or out of scope
-                    if nearby_faces or all_nearby_persons or event_type == "out_of_scope":
-                        object_info = {
-                            "track_id": obj.track_id,
-                            "class_name": obj.class_name,
-                            "confidence": obj.confidence,
-                            "bbox": obj.get_current_bbox(),
-                            "displacement": obj.get_displacement(),
-                            "nearby_persons": all_nearby_persons,
-                            "out_of_scope": obj.out_of_scope
-                        }
-                        
-                        # Combine faces and person captures for evidence
-                        all_evidence_images = nearby_faces + person_captures
-                        
-                        event_id = self.logger.log_theft_event(
-                            event_type,
-                            object_info,
-                            annotated_frame,
-                            all_evidence_images
-                        )
-                        
-                        theft_events.append({
-                            "event_id": event_id,
-                            "event_type": event_type,
-                            "object": object_info,
-                            "faces_count": len(nearby_faces),
-                            "person_captures": len(person_captures),
-                            "thief_persons": all_nearby_persons
-                        })
-                        
-                        print(f"⚠️  THEFT DETECTED: {event_type} - {obj.class_name} #{obj.track_id} "
-                              f"(displacement: {obj.get_displacement():.1f}px, faces: {len(nearby_faces)}, "
-                              f"nearby persons: {len(all_nearby_persons)})")
-                        
-                        # Draw alert on frame
-                        alert_text = f"THEFT: {event_type.upper()}!"
-                        if all_nearby_persons:
-                            alert_text += f" - Person(s) {all_nearby_persons}"
-                        cv2.putText(annotated_frame, alert_text,
-                                  (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
-                    
-                    # Mark object for removal if it's been missing too long
-                    if event_type in ("disappearance", "out_of_scope"):
-                        objects_to_remove.append(track_id)
+                                evidence_images.append(person.captured_image)
+                            
+                            event_id = self.logger.log_theft_event(
+                                "hand_in_hitbox",
+                                object_info,
+                                annotated_frame,
+                                evidence_images
+                            )
+                            
+                            theft_events.append({
+                                "event_id": event_id,
+                                "event_type": "hand_in_hitbox",
+                                "object": object_info,
+                                "person_id": person_id,
+                                "faces_count": len(nearby_faces)
+                            })
+                            
+                            # Draw alert on frame
+                            cv2.putText(annotated_frame, f"THEFT ATTEMPT! Person #{person_id}",
+                                      (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
             
-            # Remove objects that have disappeared (done after iteration)
+            # Clean up objects that have been missing too long
+            objects_to_remove = []
+            for track_id, obj in self.stationary_objects.items():
+                if obj.missing_frames > config.OBJECT_MISSING_TIMEOUT:
+                    objects_to_remove.append(track_id)
+            
             for track_id in objects_to_remove:
-                if track_id in self.tracked_objects:
-                    del self.tracked_objects[track_id]
+                del self.stationary_objects[track_id]
             
             # Clean up persons that have been missing too long
             persons_to_remove = []
@@ -817,11 +763,11 @@ class TheftDetector:
                     persons_to_remove.append(person_id)
             
             for person_id in persons_to_remove:
-                if person_id in self.tracked_persons:
-                    del self.tracked_persons[person_id]
+                del self.tracked_persons[person_id]
         
         # Draw status info
-        status_text = f"Frame: {self.frame_count} | Objects: {len(self.tracked_objects)} | " \
+        stationary_count = sum(1 for obj in self.stationary_objects.values() if obj.is_stationary)
+        status_text = f"Frame: {self.frame_count} | Objects: {len(self.stationary_objects)} ({stationary_count} stationary) | " \
                      f"Persons: {len(self.tracked_persons)}"
         cv2.putText(annotated_frame, status_text, (10, frame.shape[0] - 10),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)

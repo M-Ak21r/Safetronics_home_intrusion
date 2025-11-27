@@ -1,29 +1,28 @@
 # Safetronics Home Intrusion Detection System
 
-A real-time computer vision project built for Raspberry Pi to detect home intrusion, security breaches, and theft using advanced object tracking and face detection.
+A real-time computer vision project for detecting theft using stationary object monitoring and hand-based theft detection.
 
 ## Features
 
-### 🎯 Real-Time Theft Detection
-- **YOLOv8 Object Tracking**: Tracks multiple objects simultaneously with unique IDs using YOLOv8m (medium model) for balanced accuracy and speed
-- **Person Filtering**: Automatically ignores objects being held or overlapping with detected persons
-- **Displacement Detection**: Triggers alerts when objects move beyond a threshold distance
-- **Disappearance Detection**: Detects when tracked objects suddenly disappear from view
-- **Out-of-Scope Detection**: Marks objects as stolen when they leave the camera view
+### 🎯 Stationary Object Monitoring
+- **YOLOv8 Object Detection**: Uses YOLOv8m (medium model) for balanced accuracy and speed
+- **Stationary Detection**: Objects become monitored after remaining stable for a configurable period
+- **Hitbox Creation**: Expanded detection zones (hitboxes) around stationary objects
+- **Continuous Monitoring**: Tracks all detected objects in the scene
 
-### 🔄 Optimized Tracking
-- **Velocity-Based Prediction**: Predicts object positions during brief occlusions to maintain tracking
-- **Custom ByteTrack Configuration**: Optimized tracker settings for persistent tracking
-- **Predicted Box Display**: Shows dashed orange boxes for temporarily lost objects
-- **Extended Track Buffer**: Maintains object identity during longer occlusions
+### ✋ Hand-Based Theft Detection
+- **Hand Region Estimation**: Estimates hand positions based on person bounding boxes
+- **Hitbox Intrusion Detection**: Triggers alerts when a person's hand enters an object's hitbox
+- **Immediate Response**: Detects theft attempts in real-time
+- **Person Identification**: Tracks and marks persons who attempt theft
 
-### 👤 Face & Person Detection
+### 👤 Person Tracking
 - **Dual Detection Methods**: 
   - DNN-based face detection (high accuracy)
   - Haar Cascade fallback (lightweight)
-- **Proximity-Based Triggering**: Captures persons near tracked objects
 - **Face Cropping**: Automatically saves cropped face images as evidence
-- **Thief Marking**: Marks persons as thieves when nearby objects disappear
+- **Thief Marking**: Marks persons as thieves when their hand enters a hitbox
+- **Evidence Collection**: Captures person images at moment of theft attempt
 
 ### ⚡ Multithreading Support
 - **Parallel Frame Processing**: Separate threads for capture and processing
@@ -32,9 +31,9 @@ A real-time computer vision project built for Raspberry Pi to detect home intrus
 - **Configurable Queue Size**: Adjustable buffer for different hardware capabilities
 
 ### 📊 Evidence & Logging
-- **Annotated Frames**: Saves full frames with bounding boxes and tracking information
+- **Annotated Frames**: Saves full frames with bounding boxes, hitboxes, and alerts
 - **Face Crops**: Stores individual face images from theft events
-- **Person Captures**: Saves images of persons who were near objects
+- **Person Captures**: Saves images of persons who attempted theft
 - **JSON Logs**: Comprehensive event logs with timestamps, object info, and file references
 - **Organized Storage**: Separate directories for logs, faces, and frames
 
@@ -131,67 +130,65 @@ Edit `config.py` to customize detection parameters:
 
 ```python
 # Detection thresholds
-DISPLACEMENT_THRESHOLD = 100  # pixels
-DISAPPEARANCE_FRAMES = 30      # frames
-CONFIDENCE_THRESHOLD = 0.5     # YOLO confidence (optimized for YOLOv8m)
+CONFIDENCE_THRESHOLD = 0.5     # YOLO confidence threshold
 
-# Tracking optimization settings
-TRACK_BUFFER = 60             # frames to keep tracking lost objects
-PREDICTION_FRAMES = 15        # frames to predict object position
-OUT_OF_SCOPE_FRAMES = 45      # frames before marking as theft (out of scope)
+# Stationary object settings
+STATIONARY_THRESHOLD = 5       # pixels - max movement to be considered stationary
+STATIONARY_FRAMES = 30         # frames - how long object must be stable
+HITBOX_MARGIN = 50             # pixels - expansion margin around object
 
 # Face detection
 FACE_DETECTION_METHOD = "dnn"  # "dnn" or "haar"
 FACE_CONFIDENCE_THRESHOLD = 0.7
 
 # Model paths
-YOLO_MODEL = "yolov8m.pt"  # Medium model - balanced accuracy and speed
+YOLO_MODEL = "yolov8m.pt"      # Medium model - balanced accuracy and speed
+
+# Display settings
+DRAW_HITBOXES = True           # Show hitboxes around stationary objects
+DRAW_HAND_REGIONS = False      # Show estimated hand regions (for debugging)
 
 # Multithreading settings
-ENABLE_MULTITHREADING = True  # Enable for faster processing
-FRAME_QUEUE_SIZE = 8          # Size of frame buffer
+ENABLE_MULTITHREADING = True   # Enable for faster processing
+FRAME_QUEUE_SIZE = 8           # Size of frame buffer
 ```
 
 ## How It Works
 
 ### 1. Object Detection & Tracking
-- YOLOv8 detects and tracks objects in each frame
+- YOLOv8 detects objects in each frame
 - Each object receives a unique tracking ID
-- Object positions are recorded over time
+- Objects are monitored for stability
 
-### 2. Person Filtering
-- System identifies all "person" detections
-- Calculates IoU (Intersection over Union) between objects and person boxes
-- Objects overlapping with persons (IoU > 0.5) are filtered out
-- Prevents false alarms from people carrying items
+### 2. Stationary Object Detection
+- System tracks object movement over time
+- When object remains stable (< 5px movement) for 30 frames, it's marked as "stationary"
+- A hitbox (expanded detection zone) is created around stationary objects
+- Hitbox margin is configurable (default: 50px expansion)
 
-### 3. Theft Detection
-Three conditions trigger theft alerts:
+### 3. Hand Detection
+- System tracks all persons in the frame
+- Hand regions are estimated based on person bounding box
+- Hand positions are approximated at ~40-75% of person height, extending beyond body width
 
-**Displacement**: Object moves beyond threshold distance
-- Tracks object center point over time
-- Calculates total displacement from first detection
-- Triggers when displacement > threshold (default: 100px)
+### 4. Theft Detection
+**Hand-in-Hitbox Detection**:
+- Continuously checks if any person's hand region overlaps with a stationary object's hitbox
+- If overlap is detected → **THEFT ATTEMPT**
+- Person is immediately marked as "thief"
+- Alert is displayed on screen
 
-**Disappearance**: Object missing for extended period
-- Counts frames where tracked object is not detected
-- Uses velocity prediction to maintain tracking during brief occlusions
-- Triggers when missing_frames > threshold (default: 30 frames)
-
-**Out-of-Scope**: Object leaves camera view
-- Predicts object trajectory using velocity
-- Detects when predicted position exits frame boundaries
-- Marks nearby persons as potential thieves
-
-### 4. Face Detection & Evidence
-- When theft detected, system searches for nearby faces
-- Captures images of persons who were near the object
-- Logs event with comprehensive evidence
-- Saves:
-  - Annotated frame showing the scene
-  - Cropped face images
-  - Person captures from nearby persons
-  - JSON log with all metadata
+### 5. Evidence Collection
+- When theft detected:
+  - Annotated frame is saved showing the scene
+  - Faces are detected and cropped
+  - Person images are captured
+  - JSON log is created with all metadata
+- Evidence includes:
+  - Object hitbox location
+  - Person ID involved
+  - Timestamp
+  - Face/person images
 
 ## Project Structure
 
