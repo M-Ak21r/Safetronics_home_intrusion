@@ -201,21 +201,29 @@ class FrameBuffer:
     
     def put(self, frame: np.ndarray, frame_number: int) -> bool:
         """Add frame to buffer, dropping oldest if full"""
+        # Copy frame outside lock to avoid holding lock during expensive operation
+        frame_copy = frame.copy()
+        
         try:
             self.queue.put_nowait((frame, frame_number))
             with self.lock:
-                self.latest_frame = (frame.copy(), frame_number)
+                self.latest_frame = (frame_copy, frame_number)
             return True
         except queue.Full:
             # Drop oldest frame and add new one
-            try:
-                self.queue.get_nowait()
-                self.queue.put_nowait((frame, frame_number))
-                with self.lock:
-                    self.latest_frame = (frame.copy(), frame_number)
-                return True
-            except (queue.Empty, queue.Full):
-                return False
+            # Use a single lock to prevent race conditions
+            with self.lock:
+                try:
+                    self.queue.get_nowait()
+                except queue.Empty:
+                    pass  # Already empty, continue
+                
+                try:
+                    self.queue.put_nowait((frame, frame_number))
+                    self.latest_frame = (frame_copy, frame_number)
+                    return True
+                except queue.Full:
+                    return False
     
     def get(self, timeout: float = 0.1) -> Optional[Tuple[np.ndarray, int]]:
         """Get frame from buffer"""
@@ -227,15 +235,23 @@ class FrameBuffer:
     def get_latest(self) -> Optional[Tuple[np.ndarray, int]]:
         """Get most recent frame without removing from queue"""
         with self.lock:
-            return self.latest_frame
+            if self.latest_frame is not None:
+                return self.latest_frame
+            return None
     
     def clear(self):
         """Clear all frames from buffer"""
-        while not self.queue.empty():
-            try:
-                self.queue.get_nowait()
-            except queue.Empty:
-                break
+        with self.lock:
+            while True:
+                try:
+                    self.queue.get_nowait()
+                except queue.Empty:
+                    break
+    
+    def is_empty(self) -> bool:
+        """Thread-safe check if buffer is empty"""
+        with self.lock:
+            return self.queue.empty()
 
 
 class TheftDetector:
@@ -885,13 +901,13 @@ class TheftDetector:
                     if config.SHOW_DISPLAY:
                         cv2.imshow("Theft Detection", annotated_frame)
                 
-                # Process any theft events in queue
-                while not self.event_queue.empty():
-                    try:
+                # Process any theft events in queue (non-blocking)
+                try:
+                    while True:
                         event = self.event_queue.get_nowait()
                         # Events are already logged in process_frame
-                    except queue.Empty:
-                        break
+                except queue.Empty:
+                    pass  # No more events to process
                 
                 # Check for quit
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -900,9 +916,9 @@ class TheftDetector:
                     break
                 
                 # Check if capture thread has ended (end of video)
-                if not self.capture_thread.is_alive() and self.frame_buffer.queue.empty():
+                if not self.capture_thread.is_alive() and self.frame_buffer.is_empty():
                     # Wait for processing to complete
-                    if self.result_buffer.queue.empty():
+                    if self.result_buffer.is_empty():
                         print("End of video stream")
                         self.running = False
                         break

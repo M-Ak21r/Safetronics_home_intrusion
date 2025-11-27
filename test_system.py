@@ -236,6 +236,10 @@ def test_frame_buffer():
         buffer.put(frame2, 2)
         print("  ✓ Frames added to buffer")
         
+        # Test is_empty
+        assert not buffer.is_empty(), "Buffer should not be empty"
+        print("  ✓ is_empty check works")
+        
         # Test getting frames
         result = buffer.get(timeout=0.1)
         assert result is not None, "Should get frame from buffer"
@@ -252,6 +256,7 @@ def test_frame_buffer():
         buffer.clear()
         empty_result = buffer.get(timeout=0.1)
         assert empty_result is None, "Buffer should be empty after clear"
+        assert buffer.is_empty(), "Buffer should report empty after clear"
         print("  ✓ Buffer clear works")
         
         return True
